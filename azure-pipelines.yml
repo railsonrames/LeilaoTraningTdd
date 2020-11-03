@@ -1,0 +1,122 @@
+# ASP.NET Core
+# Build a Web project that uses ASP.NET Core.
+# Add steps that analyze code, save build artifacts, deploy, and more:
+# https://docs.microsoft.com/azure/devops/pipelines/languages/dotnet-core
+# YAML reference:
+# https://docs.microsoft.com/en-us/azure/devops/pipelines/yaml-schema
+
+
+variables: 
+    azResourceName: 'gamificacao'
+
+resources:
+  repositories:
+    - repository: dotnettemplate
+      type: git  
+      name: WizPipelines/dotnetcore-template
+      ref: refs/tags/v1.1
+  containers:
+  - container: mssql
+    image: mcr.microsoft.com/mssql/server:2017-latest-ubuntu
+    env:
+      ACCEPT_EULA: Y
+      SA_PASSWORD: Q1w2e3r4!
+      MSSQL_PID: Express
+    ports: 
+      - 1433:1433
+    options: --name mssql
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+schedules:
+  - cron: "0 0 * * *"
+    displayName: Build Noturno
+    always: true
+    branches:
+      include:
+        - master
+
+trigger:
+  batch: true
+  paths:
+    exclude:
+    - README.md
+
+stages:
+- stage: Build
+  pool: Wiz Hosted Ubuntu 1604
+  jobs:
+    - job:
+      continueOnError: true
+      pool:
+        vmImage: 'ubuntu-latest'
+      services:
+        mssql: mssql
+      steps:
+        - task: PowerShell@2
+          displayName: 'delay 10'
+          inputs:
+            targetType: 'inline'
+            script: |
+              start-sleep -s 10
+        - task: CmdLine@2
+          inputs:
+            script: 'sqlcmd -S localhost -d master -U sa -P Q1w2e3r4! -Q "SELECT @@version;"'
+        - template: dotnetcore.yml@dotnettemplate
+- stage: Uat
+  condition: and(succeeded(), or(contains(variables['Build.SourceBranch'], 'master'), contains(variables['Build.SourceBranch'], 'releases')))
+  dependsOn: [Build]
+  jobs:
+    - deployment: 
+      environment: staging
+      strategy:
+        runOnce:
+          deploy:                              
+            steps:
+            - task: AzureRmWebAppDeployment@4
+              displayName: Publish 
+              inputs:
+                ConnectionType: 'AzureRM'
+                azureSubscription: 'WX1'
+                appType: 'webApp'
+                WebAppName: '$(azResourceName)-hml-api'
+                packageForLinux: '$(Pipeline.Workspace)/drop/**/*.zip'
+- stage: Sandbox
+  condition: and(succeeded(),contains(variables['Build.SourceBranch'], 'master'))
+  dependsOn: [Uat]
+  jobs:
+    - deployment: 
+      environment: sandbox
+      strategy:
+        runOnce:
+          deploy:                              
+            steps:
+            - task: AzureRmWebAppDeployment@4
+              displayName: Publish 
+              inputs:
+                ConnectionType: 'AzureRM'
+                azureSubscription: 'WX1'
+                appType: 'webApp'
+                WebAppName: '$(azResourceName)-sb-api'
+                packageForLinux: '$(Pipeline.Workspace)/drop/**/*.zip'
+- stage: Production
+  condition: and(succeeded(),contains(variables['Build.SourceBranch'], 'master'))
+  dependsOn: [Uat]
+  jobs:
+    - deployment: 
+      environment: production
+      strategy:
+        runOnce:
+          deploy:                              
+            steps:
+            - task: AzureRmWebAppDeployment@4
+              displayName: Publish 
+              inputs:
+                ConnectionType: 'AzureRM'
+                azureSubscription: 'WX1'
+                appType: 'webApp'
+                WebAppName: '$(azResourceName)-prd-api'
+                packageForLinux: '$(Pipeline.Workspace)/drop/**/*.zip'
+
+
